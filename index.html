@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>NEON DRIVE</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050011;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #fff;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+        /* UI Overlay */
+        #ui {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+        .hud {
+            display: flex;
+            justify-content: space-between;
+            padding: 20px 40px;
+            font-size: 28px;
+            font-weight: 900;
+            font-style: italic;
+            text-shadow: 0 0 10px #00ffff, 0 0 20px #00ffff;
+            letter-spacing: 2px;
+        }
+        .hud-right {
+            text-shadow: 0 0 10px #ff007f, 0 0 20px #ff007f;
+        }
+        /* Menus */
+        .screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: rgba(5, 0, 17, 0.7);
+            backdrop-filter: blur(5px);
+            pointer-events: auto;
+            transition: opacity 0.3s ease;
+        }
+        .hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        h1 {
+            font-size: 72px;
+            margin: 0 0 10px 0;
+            font-style: italic;
+            text-transform: uppercase;
+            background: linear-gradient(to bottom, #00ffff, #ff007f);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            filter: drop-shadow(0px 0px 15px rgba(255,0,127,0.6));
+            text-align: center;
+        }
+        h2 {
+            font-size: 48px;
+            color: #ff0055;
+            text-shadow: 0 0 15px #ff0055;
+            margin: 0 0 20px 0;
+            font-style: italic;
+        }
+        p {
+            font-size: 18px;
+            color: #ccc;
+            margin-bottom: 30px;
+            letter-spacing: 1px;
+        }
+        button {
+            padding: 15px 40px;
+            font-size: 24px;
+            font-weight: bold;
+            font-style: italic;
+            color: #fff;
+            background: linear-gradient(45deg, #ff007f, #7900ff);
+            border: 2px solid #00ffff;
+            border-radius: 4px;
+            cursor: pointer;
+            box-shadow: 0 0 15px #ff007f, inset 0 0 15px #00ffff;
+            transition: all 0.2s ease;
+            text-transform: uppercase;
+        }
+        button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 25px #00ffff, inset 0 0 25px #ff007f;
+        }
+        /* Crash Flash Effect */
+        #flash {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #fff;
+            z-index: 5;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.5s ease-out;
+        }
+        /* Mobile Touch Zones */
+        #touch-controls {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            z-index: 2;
+        }
+        .touch-zone {
+            flex: 1;
+            height: 100%;
+        }
+        @media (max-width: 600px) {
+            h1 { font-size: 48px; }
+            .hud { padding: 15px; font-size: 20px; }
+        }
+    </style>
+
+    <!-- Import Three.js directly via CDN (Vercel Friendly) -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+    <div id="flash"></div>
+
+    <div id="touch-controls">
+        <div class="touch-zone" id="touch-left"></div>
+        <div class="touch-zone" id="touch-right"></div>
+    </div>
+
+    <div id="ui">
+        <div class="hud">
+            <div id="score-display">SCORE: 0</div>
+            <div class="hud-right" id="speed-display">0 KM/H</div>
+        </div>
+
+        <div id="start-screen" class="screen">
+            <h1>NEON OVERDRIVE</h1>
+            <p>USE [A / D] or [LEFT / RIGHT] or [TOUCH SIDES] TO STEER</p>
+            <button id="start-btn">IGNITION</button>
+        </div>
+
+        <div id="game-over-screen" class="screen hidden">
+            <h2>WRECKED</h2>
+            <p id="final-score">SCORE: 0</p>
+            <button id="restart-btn">PLAY AGAIN</button>
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // --- GAME CONFIG & STATE ---
+        const ROAD_WIDTH = 24;
+        const PLAYABLE_WIDTH = 20;
+        let state = 'START'; // START, PLAYING, CRASHED
+        let score = 0;
+        let speed = 0;
+        const BASE_SPEED = 80;
+        const MAX_SPEED = 200;
+        let shakeIntensity = 0;
+
+        // --- DOM ELEMENTS ---
+        const scoreEl = document.getElementById('score-display');
+        const speedEl = document.getElementById('speed-display');
+        const startScreen = document.getElementById('start-screen');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const finalScoreEl = document.getElementById('final-score');
+        const flashEl = document.getElementById('flash');
+
+        // --- THREE.JS SETUP ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x050011);
+        scene.fog = new THREE.FogExp2(0x050011, 0.008);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 500);
+        const baseCamPos = new THREE.Vector3(0, 4, 10);
+        camera.position.copy(baseCamPos);
+        camera.lookAt(0, 1, -20);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.shadowMap.enabled = true;
+        container.appendChild(renderer.domElement);
+
+        // --- LIGHTING ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xff007f, 1.5);
+        dirLight.position.set(20, 40, 20);
+        dirLight.castShadow = true;
+        scene.add(dirLight);
+
+        // --- ENVIRONMENT (ROAD, GRID, SUN, PILLARS) ---
+        // Retro Sun
+        const sunGeo = new THREE.CircleGeometry(60, 32);
+        const sunMat = new THREE.MeshBasicMaterial({ color: 0xff0055, fog: false });
+        const sun = new THREE.Mesh(sunGeo, sunMat);
+        sun.position.set(0, 20, -250);
+        scene.add(sun);
+
+        // Moving Grid (gives illusion of speed)
+        const gridHelper = new THREE.GridHelper(400, 100, 0x00ffff, 0x220044);
+        gridHelper.position.y = -0.1;
+        scene.add(gridHelper);
+
+        // Road surface
+        const roadGeo = new THREE.PlaneGeometry(ROAD_WIDTH, 400);
+        const roadMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0f, roughness: 0.8, metalness: 0.2 });
+        const road = new THREE.Mesh(roadGeo, roadMat);
+        road.rotation.x = -Math.PI / 2;
+        road.receiveShadow = true;
+        scene.add(road);
+
+        // Glowing Guardrails
+        const railGeo = new THREE.BoxGeometry(0.5, 1, 400);
+        const railMat = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+        const leftRail = new THREE.Mesh(railGeo, railMat);
+        leftRail.position.set(-ROAD_WIDTH / 2, 0.5, 0);
+        const rightRail = new THREE.Mesh(railGeo, railMat);
+        rightRail.position.set(ROAD_WIDTH / 2, 0.5, 0);
+        scene.add(leftRail, rightRail);
+
+        // Roadside Neon Pillars
+        const pillars = [];
+        const pillarGeo = new THREE.BoxGeometry(1, 15, 1);
+        const pillarMat = new THREE.MeshBasicMaterial({ color: 0xff007f });
+        for (let i = 0; i < 20; i++) {
+            const pLeft = new THREE.Mesh(pillarGeo, pillarMat);
+            const pRight = new THREE.Mesh(pillarGeo, pillarMat);
+            let z = -i * 20;
+            pLeft.position.set(-ROAD_WIDTH / 2 - 4, 7.5, z);
+            pRight.position.set(ROAD_WIDTH / 2 + 4, 7.5, z);
+            scene.add(pLeft, pRight);
+            pillars.push(pLeft, pRight);
+        }
+
+        // --- PLAYER CAR ---
+        const playerCar = new THREE.Group();
+        scene.add(playerCar);
+
+        const chassisMat = new THREE.MeshStandardMaterial({ color: 0x00ffff, roughness: 0.2, metalness: 0.8 });
+        const cabinMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.1, metalness: 0.9 });
+        const tailLightMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+        const wheelMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.9 });
+
+        // Main Body
+        const body = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.6, 4.5), chassisMat);
+        body.position.y = 0.6;
+        body.castShadow = true;
+        playerCar.add(body);
+
+        // Cabin
+        const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.5, 2.2), cabinMat);
+        cabin.position.set(0, 1.15, -0.2);
+        playerCar.add(cabin);
+
+        // Tail Lights (Neon Strip)
+        const tailLight = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.2, 0.1), tailLightMat);
+        tailLight.position.set(0, 0.7, 2.26);
+        playerCar.add(tailLight);
+
+        // Wheels
+        const wheelGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 16);
+        wheelGeo.rotateZ(Math.PI / 2);
+        const wheelPositions = [ [-1.1, 0.4, -1.3], [1.1, 0.4, -1.3], [-1.1, 0.4, 1.4], [1.1, 0.4, 1.4] ];
+        wheelPositions.forEach(pos => {
+            const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+            wheel.position.set(...pos);
+            playerCar.add(wheel);
+        });
+
+        // Car Underglow
+        const underglow = new THREE.PointLight(0x00ffff, 2, 6);
+        underglow.position.set(0, 0.2, 0);
+        playerCar.add(underglow);
+
+        // --- TRAFFIC / OBSTACLES ---
+        const obstacles = [];
+        const obsMaterials = [
+            new THREE.MeshStandardMaterial({ color: 0xff0055, roughness: 0.3, metalness: 0.5 }),
+            new THREE.MeshStandardMaterial({ color: 0xffaa00, roughness: 0.3, metalness: 0.5 }),
+            new THREE.MeshStandardMaterial({ color: 0xaa00ff, roughness: 0.3, metalness: 0.5 })
+        ];
+
+        function createObstacle() {
+            const obsGroup = new THREE.Group();
+            const isBlock = Math.random() > 0.7; // 30% chance for a stationary neon barrier, 70% moving car
+
+            if (isBlock) {
+                const geo = new THREE.BoxGeometry(3.5, 2, 1);
+                const mat = new THREE.MeshBasicMaterial({ color: 0xff0000, wireframe: false });
+                const mesh = new THREE.Mesh(geo, mat);
+                mesh.position.y = 1;
+                obsGroup.add(mesh);
+                // Add wireframe glow
+                const wire = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true }));
+                wire.position.y = 1;
+                obsGroup.add(wire);
+                obsGroup.userData = { width: 3.5, length: 1, speedOffset: 0, color: 0xff0000 };
+            } else {
+                const mat = obsMaterials[Math.floor(Math.random() * obsMaterials.length)];
+                const oBody = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.7, 4.2), mat);
+                oBody.position.y = 0.7;
+                oBody.castShadow = true;
+                obsGroup.add(oBody);
+
+                const oCabin = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.5, 2.0), cabinMat);
+                oCabin.position.set(0, 1.3, 0);
+                obsGroup.add(oCabin);
+
+                // Headlights (facing player if oncoming, or taillights)
+                const lightMat = new THREE.MeshBasicMaterial({ color: 0xffffaa });
+                const lights = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.2, 0.1), lightMat);
+                lights.position.set(0, 0.7, 2.11);
+                obsGroup.add(lights);
+
+                obsGroup.userData = { 
+                    width: 2.2, 
+                    length: 4.2, 
+                    speedOffset: Math.random() * 20 + 20, // Moving slower than player
+                    color: mat.color.getHex()
+                };
+            }
+
+            // Spawn far away
+            const laneX = (Math.random() - 0.5) * (PLAYABLE_WIDTH - 2);
+            obsGroup.position.set(laneX, 0, -250 - Math.random() * 100);
+            scene.add(obsGroup);
+            obstacles.push(obsGroup);
+        }
+
+        // --- CRASH / EXPLOSION PHYSICS SYSTEM ---
+        const debrisList = [];
+        const shardGeo = new THREE.BoxGeometry(0.4, 0.4, 0.4);
+        
+        function triggerCrash(crashPosition, obstacleColor) {
+            state = 'CRASHED';
+            shakeIntensity = 1.5; // Violent camera shake
+            
+            // Screen Flash
+            flashEl.style.opacity = '0.8';
+            setTimeout(() => { flashEl.style.opacity = '0'; }, 50);
+
+            // Hide Player Car
+            playerCar.visible = false;
+
+            // Spawn Explosion Shards (Car + Obstacle colors)
+            const colors = [0x00ffff, 0x111111, 0xff0055, obstacleColor, 0xffaa00, 0xffffff];
+            
+            for (let i = 0; i < 80; i++) {
+                const mat = new THREE.MeshStandardMaterial({ 
+                    color: colors[Math.floor(Math.random() * colors.length)],
+                    roughness: 0.2,
+                    metalness: 0.8,
+                    emissive: i % 5 === 0 ? 0xff4400 : 0x000000 // Some glowing fire shards
+                });
+                
+                const shard = new THREE.Mesh(shardGeo, mat);
+                
+                // Randomize size to look like car parts
+                shard.scale.set(
+                    Math.random() * 2 + 0.2,
+                    Math.random() * 1 + 0.2,
+                    Math.random() * 2 + 0.2
+                );
+
+                shard.position.copy(crashPosition);
+                shard.position.y += Math.random() * 1.5;
+
+                // Physics velocity (explode outward, upward, and carry forward momentum)
+                const velocity = new THREE.Vector3(
+                    (Math.random() - 0.5) * 40,
+                    Math.random() * 25 + 5,
+                    (Math.random() - 0.5) * 40 - (speed * 0.2) 
+                );
+
+                const rotVelocity = new THREE.Vector3(
+                    Math.random() * 10,
+                    Math.random() * 10,
+                    Math.random() * 10
+                );
+
+                shard.userData = { velocity, rotVelocity };
+                scene.add(shard);
+                debrisList.push(shard);
+            }
+
+            // Show Game Over UI after dramatic pause
+            setTimeout(() => {
+                finalScoreEl.innerText = `FINAL SCORE: ${Math.floor(score)}`;
+                gameOverScreen.classList.remove('hidden');
+            }, 1800);
+        }
+
+        // --- INPUT HANDLING ---
+        const keys = { left: false, right: false };
+        let playerVelocityX = 0;
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = true;
+            if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = true;
+        });
+        window.addEventListener('keyup', (e) => {
+            if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = false;
+            if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = false;
+        });
+
+        // Mobile Touch
+        const touchLeft = document.getElementById('touch-left');
+        const touchRight = document.getElementById('touch-right');
+        touchLeft.addEventListener('touchstart', (e) => { e.preventDefault(); keys.left = true; });
+        touchLeft.addEventListener('touchend', (e) => { e.preventDefault(); keys.left = false; });
+        touchRight.addEventListener('touchstart', (e) => { e.preventDefault(); keys.right = true; });
+        touchRight.addEventListener('touchend', (e) => { e.preventDefault(); keys.right = false; });
+
+        // --- GAME MANAGEMENT ---
+        function startGame() {
+            state = 'PLAYING';
+            score = 0;
+            speed = BASE_SPEED;
+            playerCar.position.set(0, 0, 0);
+            playerCar.rotation.set(0, 0, 0);
+            playerCar.visible = true;
+            playerVelocityX = 0;
+            shakeIntensity = 0;
+
+            // Clear old obstacles
+            obstacles.forEach(o => scene.remove(o));
+            obstacles.length = 0;
+
+            // Clear old debris
+            debrisList.forEach(d => scene.remove(d));
+            debrisList.length = 0;
+
+            // Spawn initial wave
+            for (let i = 0; i < 8; i++) {
+                createObstacle();
+                obstacles[i].position.z = -60 - (i * 40); // Spread them out initially
+            }
+
+            startScreen.classList.add('hidden');
+            gameOverScreen.classList.add('hidden');
+        }
+
+        document.getElementById('start-btn').addEventListener('click', startGame);
+        document.getElementById('restart-btn').addEventListener('click', startGame);
+
+        // --- MAIN GAME LOOP ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const dt = Math.min(clock.getDelta(), 0.1); // Cap delta time
+
+            if (state === 'PLAYING') {
+                // Increase speed and score
+                speed = Math.min(MAX_SPEED, speed + dt * 2.5);
+                score += speed * dt * 0.5;
+                
+                scoreEl.innerText = `SCORE: ${Math.floor(score)}`;
+                speedEl.innerText = `${Math.floor(speed * 1.5)} KM/H`;
+
+                // Dynamic FOV for sense of extreme speed
+                camera.fov = 60 + ((speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED)) * 25;
+                camera.updateProjectionMatrix();
+
+                // Player Steering (Smooth physics-like interpolation)
+                const steerForce = 45;
+                if (keys.left) playerVelocityX -= steerForce * dt;
+                if (keys.right) playerVelocityX += steerForce * dt;
+                
+                // Friction / Damping
+                playerVelocityX *= Math.pow(0.05, dt); 
+                playerCar.position.x += playerVelocityX * dt;
+
+                // Clamp to road & bounce off walls slightly
+                const limit = PLAYABLE_WIDTH / 2 - 1.2;
+                if (playerCar.position.x < -limit) {
+                    playerCar.position.x = -limit;
+                    playerVelocityX = Math.abs(playerVelocityX) * 0.5;
+                    shakeIntensity = 0.2; // Minor wall scrape shake
+                }
+                if (playerCar.position.x > limit) {
+                    playerCar.position.x = limit;
+                    playerVelocityX = -Math.abs(playerVelocityX) * 0.5;
+                    shakeIntensity = 0.2;
+                }
+
+                // Car Body Roll & Yaw (Visual flair)
+                playerCar.rotation.z = -playerVelocityX * 0.015;
+                playerCar.rotation.y = -playerVelocityX * 0.01;
+
+                // Move Environment
+                gridHelper.position.z += speed * dt;
+                if (gridHelper.position.z > 4) gridHelper.position.z %= 4;
+
+                pillars.forEach(p => {
+                    p.position.z += speed * dt;
+                    if (p.position.z > 20) p.position.z -= 400;
+                });
+
+                // Manage Obstacles & Collisions
+                for (let i = obstacles.length - 1; i >= 0; i--) {
+                    const obs = obstacles[i];
+                    // Move obstacle towards player
+                    const relSpeed = speed - obs.userData.speedOffset;
+                    obs.position.z += relSpeed * dt;
+
+                    // Collision Detection (AABB)
+                    const pBox = { x: playerCar.position.x, z: playerCar.position.z, w: 2.0, l: 4.2 };
+                    const oBox = { x: obs.position.x, z: obs.position.z, w: obs.userData.width, l: obs.userData.length };
+
+                    if (Math.abs(pBox.x - oBox.x) < (pBox.w + oBox.w) / 2 &&
+                        Math.abs(pBox.z - oBox.z) < (pBox.l + oBox.l) / 2) {
+                        // CRASH!
+                        triggerCrash(playerCar.position, obs.userData.color);
+                        break;
+                    }
+
+                    // Recycle passed obstacles
+                    if (obs.position.z > 20) {
+                        scene.remove(obs);
+                        obstacles.splice(i, 1);
+                        createObstacle();
+                        
+                        // Spawn extra obstacles as game gets harder
+                        if (obstacles.length < Math.floor(speed / 15) && Math.random() > 0.5) {
+                            createObstacle();
+                        }
+                    }
+                }
+            } 
+            else if (state === 'CRASHED') {
+                // Slow down environment to a halt
+                speed = Math.max(0, speed - dt * 150);
+                gridHelper.position.z += speed * dt;
+                if (gridHelper.position.z > 4) gridHelper.position.z %= 4;
+
+                // Update Explosion Debris Physics
+                debrisList.forEach(shard => {
+                    shard.position.addScaledVector(shard.userData.velocity, dt);
+                    shard.userData.velocity.y -= 40 * dt; // Gravity
+
+                    shard.rotation.x += shard.userData.rotVelocity.x * dt;
+                    shard.rotation.y += shard.userData.rotVelocity.y * dt;
+                    shard.rotation.z += shard.userData.rotVelocity.z * dt;
+
+                    // Bounce off the road
+                    if (shard.position.y < 0.2) {
+                        shard.position.y = 0.2;
+                        shard.userData.velocity.y *= -0.6; // Bounce with energy loss
+                        shard.userData.velocity.x *= 0.8;  // Friction
+                        shard.userData.velocity.z *= 0.8;
+                    }
+                });
+
+                // Spawn continuous fire/smoke particles from the wreck site
+                if (Math.random() > 0.3) {
+                    const fire = new THREE.Mesh(shardGeo, new THREE.MeshBasicMaterial({ color: Math.random() > 0.5 ? 0xff4400 : 0x333333 }));
+                    fire.scale.setScalar(Math.random() * 0.8 + 0.2);
+                    fire.position.copy(playerCar.position);
+                    fire.position.x += (Math.random() - 0.5) * 2;
+                    fire.position.z += (Math.random() - 0.5) * 2;
+                    fire.userData = { 
+                        velocity: new THREE.Vector3((Math.random()-0.5)*5, Math.random()*15 + 5, (Math.random()-0.5)*5),
+                        rotVelocity: new THREE.Vector3(1,1,1)
+                    };
+                    scene.add(fire);
+                    debrisList.push(fire);
+                }
+            }
+            else if (state === 'START') {
+                // Idle animation on menu
+                gridHelper.position.z += 20 * dt;
+                if (gridHelper.position.z > 4) gridHelper.position.z %= 4;
+                playerCar.position.x = Math.sin(clock.getElapsedTime() * 2) * 2;
+            }
+
+            // Camera Follow & Shake Logic
+            const targetCamX = playerCar.position.x * 0.6;
+            camera.position.x += (targetCamX - camera.position.x) * 10 * dt;
+            camera.position.y = baseCamPos.y;
+            camera.position.z = baseCamPos.z;
+
+            if (shakeIntensity > 0) {
+                camera.position.x += (Math.random() - 0.5) * shakeIntensity;
+                camera.position.y += (Math.random() - 0.5) * shakeIntensity;
+                camera.position.z += (Math.random() - 0.5) * shakeIntensity;
+                shakeIntensity = Math.max(0, shakeIntensity - dt * 2.5); // Decay shake
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // --- WINDOW RESIZE ---
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Start loop
+        animate();
+    </script>
+</body>
+</html>
